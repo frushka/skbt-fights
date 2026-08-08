@@ -5,7 +5,7 @@ export function createRoomId(length = 6) {
   const bytes = new Uint8Array(length);
   crypto.getRandomValues(bytes);
   for (let i = 0; i < length; i++) {
-    out += ROOM_ID_ALPHABET[bytes[i] % ROOM_ID_ALPHABET.length];
+    out += ROOM_ID_ALPHABET[(bytes[i] ?? 0) % ROOM_ID_ALPHABET.length];
   }
   return out;
 }

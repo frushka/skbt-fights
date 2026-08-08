@@ -52,7 +52,9 @@ function Dashboard() {
         setValues((prev) => {
           const alive = new Set(voters.map(([key]) => key));
           const next: Record<string, number> = {};
-          for (const key of Object.keys(prev)) if (alive.has(key)) next[key] = prev[key];
+          for (const key of Object.keys(prev)) {
+            if (alive.has(key)) next[key] = prev[key] ?? 0;
+          }
           return next;
         });
       })
