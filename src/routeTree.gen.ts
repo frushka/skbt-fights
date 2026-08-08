@@ -10,33 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DashboardRoomIdRouteImport } from './routes/dashboard.$roomId'
+import { Route as VoteRoomIdRouteImport } from './routes/vote.$roomId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DashboardRoomIdRoute = DashboardRoomIdRouteImport.update({
+  id: '/dashboard/$roomId',
+  path: '/dashboard/$roomId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VoteRoomIdRoute = VoteRoomIdRouteImport.update({
+  id: '/vote/$roomId',
+  path: '/vote/$roomId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/dashboard/$roomId': typeof DashboardRoomIdRoute
+  '/vote/$roomId': typeof VoteRoomIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/dashboard/$roomId': typeof DashboardRoomIdRoute
+  '/vote/$roomId': typeof VoteRoomIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/dashboard/$roomId': typeof DashboardRoomIdRoute
+  '/vote/$roomId': typeof VoteRoomIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/dashboard/$roomId' | '/vote/$roomId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/dashboard/$roomId' | '/vote/$roomId'
+  id: '__root__' | '/' | '/dashboard/$roomId' | '/vote/$roomId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DashboardRoomIdRoute: typeof DashboardRoomIdRoute
+  VoteRoomIdRoute: typeof VoteRoomIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,22 +68,28 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dashboard/$roomId': {
+      id: '/dashboard/$roomId'
+      path: '/dashboard/$roomId'
+      fullPath: '/dashboard/$roomId'
+      preLoaderRoute: typeof DashboardRoomIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vote/$roomId': {
+      id: '/vote/$roomId'
+      path: '/vote/$roomId'
+      fullPath: '/vote/$roomId'
+      preLoaderRoute: typeof VoteRoomIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DashboardRoomIdRoute: DashboardRoomIdRoute,
+  VoteRoomIdRoute: VoteRoomIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
