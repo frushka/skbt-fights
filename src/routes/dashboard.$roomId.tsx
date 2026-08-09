@@ -69,11 +69,12 @@ function Dashboard() {
     };
   }, [roomId]);
 
-  const total = useMemo(
-    () => Object.values(values).reduce((sum, v) => sum + v, 0),
+  const sum = useMemo(
+    () => Object.values(values).reduce((acc, v) => acc + v, 0),
     [values],
   );
-  const scale = Math.max(participants, 1) * 100;
+  const total = participants > 0 ? sum / participants : 0;
+  const scale = 100;
   const ratio = Math.max(-1, Math.min(1, total / scale));
   const positive = total >= 0;
 
@@ -129,14 +130,14 @@ function Dashboard() {
               />
             </div>
             <div className="pointer-events-none absolute -right-24 flex h-full flex-col justify-between py-0 text-xs text-muted-foreground">
-              <span>+{scale}</span>
+              <span>+100</span>
               <span>0</span>
-              <span>−{scale}</span>
+              <span>−100</span>
             </div>
           </div>
 
           <p className="mt-8 text-sm text-muted-foreground">
-            Максимум шкалы: {scale} · минимум: −{scale}
+            Шкала фиксирована: +100 … −100
           </p>
         </section>
       </div>
