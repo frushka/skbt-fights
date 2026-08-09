@@ -69,11 +69,12 @@ function Dashboard() {
     };
   }, [roomId]);
 
-  const total = useMemo(
-    () => Object.values(values).reduce((sum, v) => sum + v, 0),
+  const sum = useMemo(
+    () => Object.values(values).reduce((acc, v) => acc + v, 0),
     [values],
   );
-  const scale = Math.max(participants, 1) * 100;
+  const total = participants > 0 ? sum / participants : 0;
+  const scale = 100;
   const ratio = Math.max(-1, Math.min(1, total / scale));
   const positive = total >= 0;
 
