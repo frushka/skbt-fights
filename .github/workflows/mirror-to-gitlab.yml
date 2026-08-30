@@ -1,0 +1,43 @@
+# Зеркалирование main в GitLab.
+#
+# Сайт публикуется GitLab Pages, а работа идёт в GitHub (сюда же коммитит Lovable).
+# Проект в GitLab заведён разовым импортом — живой связи между сервисами нет, поэтому
+# изменения доставляет этот workflow: он пушит main в GitLab, а тот запускает свой
+# пайплайн из .gitlab-ci.yml и обновляет сайт.
+#
+# Требуется секрет GITLAB_TOKEN — personal access token GitLab со scope write_repository
+# (Settings → Secrets and variables → Actions).
+
+name: Mirror to GitLab
+
+on:
+  push:
+    branches: [main]
+  # Позволяет запустить зеркалирование вручную со вкладки Actions.
+  workflow_dispatch:
+
+# Два пуша подряд не должны толкаться в GitLab одновременно.
+concurrency:
+  group: mirror-to-gitlab
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Нужна полная история: GitLab принимает пуш только поверх известных ему коммитов.
+          fetch-depth: 0
+
+      - name: Push main to GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          if [ -z "$GITLAB_TOKEN" ]; then
+            echo "Секрет GITLAB_TOKEN не задан — добавьте его в Settings → Secrets and variables → Actions." >&2
+            exit 1
+          fi
+          # Обычный пуш, не force: если истории разойдутся, лучше увидеть ошибку,
+          # чем молча затереть то, что есть в GitLab.
+          git push "https://oauth2:${GITLAB_TOKEN}@gitlab.com/xfrushka/skbt-fights.git" HEAD:refs/heads/main

@@ -11,10 +11,10 @@ GitLab Pages раздаёт **только статические файлы**: 
 
 Поэтому для Pages сделана **отдельная статическая сборка**:
 
-| | Lovable / Cloudflare | GitLab Pages |
-| --- | --- | --- |
-| Конфиг | `vite.config.ts` | `vite.config.pages.ts` |
-| Команда | `bun run build` | `bun run build:pages` |
+|           | Lovable / Cloudflare    | GitLab Pages                    |
+| --------- | ----------------------- | ------------------------------- |
+| Конфиг    | `vite.config.ts`        | `vite.config.pages.ts`          |
+| Команда   | `bun run build`         | `bun run build:pages`           |
 | Результат | `.output/` (SSR-воркер) | `dist/client/` (чистая статика) |
 
 Существующий деплой на `skbt-fights.lovable.app` при этом не меняется — файлы независимы.
@@ -38,12 +38,30 @@ git remote add gitlab https://gitlab.com/<namespace>/skbt-fights.git
 git push -u gitlab main
 ```
 
-При варианте Б помните: пуш в GitHub и пуш в GitLab — разные действия. Чтобы Pages обновлялись
-автоматически, удобнее один раз настроить зеркалирование: **Settings → Repository → Mirroring
-repositories** (pull mirror из GitHub доступен на платных тарифах; на Free проще пушить в оба
-remote или сделать push mirror GitLab → GitHub, а работать в GitLab).
+Импорт — разовая копия, живой связи между сервисами он не создаёт. Работа при этом идёт в
+GitHub (туда же коммитит Lovable), а сайт собирается из GitLab, поэтому изменения нужно
+доставлять.
 
-### 1.2. Включить уникальный домен
+### 1.2. Зеркалирование GitHub → GitLab
+
+Автоматическое подтягивание на стороне GitLab (pull mirroring) доступно только на платных
+тарифах, поэтому синхронизацию делает GitHub Actions — `.github/workflows/mirror-to-gitlab.yml`.
+При каждом изменении `main` он пушит его в GitLab, а тот запускает пайплайн и обновляет сайт.
+
+Что нужно один раз настроить:
+
+1. **GitLab** → аватар → **Edit profile** → **Access tokens** → **Generate token** →
+   **Personal access token**. Имя любое, срок — подлиннее, галочка ровно одна:
+   **`write_repository`**. Значение токена показывается один раз, скопируйте сразу.
+2. **GitHub** → репозиторий → **Settings** → **Secrets and variables** → **Actions** →
+   **New repository secret**. Имя: `GITLAB_TOKEN`, значение: скопированный токен.
+
+Адрес целевого репозитория зашит в workflow — при переезде правится там.
+
+Запустить зеркалирование вручную можно во вкладке **Actions** → workflow **Mirror to GitLab** →
+**Run workflow**.
+
+### 1.3. Включить уникальный домен
 
 **Settings → Pages → Use unique domain** (галочка включена по умолчанию для новых проектов).
 
@@ -54,24 +72,24 @@ remote или сделать push mirror GitLab → GitHub, а работать 
 
 С уникальным доменом адрес будет вида `https://skbt-fights-a1b2c3.gitlab.io/`.
 
-### 1.3. Проверить, что Pages вообще включены
+### 1.4. Проверить, что Pages вообще включены
 
 **Settings → General → Visibility, project features, permissions → Pages** — переключатель должен
 быть активен. Там же выбирается, кто видит сайт (Everyone / только участники проекта).
 
-### 1.4. Переменные окружения (опционально)
+### 1.5. Переменные окружения (опционально)
 
 Ключи Supabase сейчас лежат в закоммиченном `.env` и попадают в сборку автоматически — делать
 ничего не нужно. Ключ `sb_publishable_...` публичный по смыслу, он и так уезжает в браузерный
 бандл.
 
 Если решите убрать `.env` из репозитория, задайте в **Settings → CI/CD → Variables** (снять
-галочку *Protected*, если деплой идёт не только из protected-ветки):
+галочку _Protected_, если деплой идёт не только из protected-ветки):
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_PUBLISHABLE_KEY`
 
-### 1.5. Запустить деплой
+### 1.6. Запустить деплой
 
 Просто запушьте в основную ветку — пайплайн стартует сам:
 
@@ -84,6 +102,7 @@ git push origin main
 ```yaml
 image: oven/bun:1
 ```
+
 Докер-образ для всех job'ов. В проекте `bun.lock` и `bunfig.toml`, значит и ставить зависимости
 надо bun'ом — иначе лок бесполезен.
 
@@ -91,6 +110,7 @@ image: oven/bun:1
 stages:
   - deploy
 ```
+
 Список стадий пайплайна. Стадия здесь одна: собрали и сразу опубликовали.
 
 ```yaml
@@ -101,6 +121,7 @@ cache:
   paths:
     - node_modules/
 ```
+
 Кэш зависимостей между пайплайнами. Ключ считается от содержимого `bun.lock`: лок изменился —
 ключ другой — кэш перестраивается. Так не приходится качать 418 пакетов на каждый коммит.
 
@@ -108,68 +129,78 @@ cache:
 pages:
   stage: deploy
 ```
+
 **Ключевой момент.** GitLab считает деплоем Pages job с именем ровно `pages`. Переименуете —
 сайт не опубликуется, пайплайн при этом останется зелёным.
 
 ```yaml
-  script:
-    - sed -i 's#https://europe-west1-npm\.pkg\.dev/lovable-core-prod/sandbox-npm-cache/#https://registry.npmjs.org/#g' bun.lock
+script:
+  - sed -i 's#https://europe-west1-npm\.pkg\.dev/lovable-core-prod/sandbox-npm-cache/#https://registry.npmjs.org/#g' bun.lock
 ```
+
 Девять пакетов (`@supabase/*`, `qrcode.react` и их зависимости) запинены в локе на приватное
 npm-зеркало Lovable. Снаружи их песочницы оно отдаёт **403**, и установка падает. Пути внутри
 зеркала совпадают с путями npmjs, поэтому меняется только хост — версии и integrity-хеши те же,
 ставятся ровно те же пакеты. Правка живёт внутри job'а и в репозиторий не попадает.
 
 ```yaml
-    - bun install --frozen-lockfile
+- bun install --frozen-lockfile
 ```
+
 Установка строго по локу: если `package.json` разошёлся с `bun.lock`, job упадёт, а не соберёт
 втихую другие версии.
 
 ```yaml
-    - bun run build:pages
+- bun run build:pages
 ```
+
 Статическая сборка (`vite build --config vite.config.pages.ts`). На выходе `dist/client`:
 ассеты, `favicon.ico`, `robots.txt` и пререндеренная оболочка `_shell.html`.
 
 ```yaml
-    - rm -rf public
-    - mv dist/client public
+- rm -rf public
+- mv dist/client public
 ```
+
 GitLab Pages публикует папку `public`. В репозитории `public/` уже занята исходными статик-файлами,
 но Vite при сборке копирует их внутрь `dist/client`, так что ничего не теряется.
 
 ```yaml
-    - cp public/_shell.html public/index.html
+- cp public/_shell.html public/index.html
 ```
+
 В SPA-режиме TanStack Start пререндерит оболочку приложения в `_shell.html`. Главной страницей
 сайта должен быть `index.html` — копируем.
 
 ```yaml
-    - printf '/*  /index.html  200\n' > public/_redirects
+- printf '/*  /index.html  200\n' > public/_redirects
 ```
+
 SPA-фолбэк. Файлов `/vote/abcd12` и `/dashboard/abcd12` на диске не существует — это клиентские
 маршруты. Правило говорит Pages: на любой неизвестный путь отдай `index.html` **со статусом 200**
 (не редиректом), дальше роутер разберётся сам. Файл обязан лежать в корне опубликованной папки.
 
 ```yaml
-    - cp public/_shell.html public/404.html
+- cp public/_shell.html public/404.html
 ```
+
 Подстраховка. Если `_redirects` по какой-то причине не сработает, GitLab отдаст `404.html` —
 приложение всё равно загрузится и покажет нужный маршрут.
 
 ```yaml
-  artifacts:
-    paths:
-      - public
+artifacts:
+  paths:
+    - public
 ```
+
 Артефакт — то, что job передаёт наружу. Pages забирает сайт именно отсюда: нет артефакта `public`
 — нет публикации.
 
 ```yaml
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+rules:
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 ```
+
 Job запускается только для основной ветки проекта (`main` или `master` — что настроено в
 **Settings → Repository → Branch defaults**). Пуши в feature-ветки и MR'ы прод не перезаписывают.
 
@@ -215,7 +246,7 @@ npx serve dist/client     # или любой статический серве�
 ## 4. Как проверить, что деплой прошёл
 
 1. **Пайплайн.** Слева **Build → Pipelines**: последний пайплайн для основной ветки должен быть
-   зелёным, внутри — job `pages` со статусом *passed*. В логе job'а в конце будет строка про
+   зелёным, внутри — job `pages` со статусом _passed_. В логе job'а в конце будет строка про
    загрузку артефакта `public`.
 2. **Отдельный job публикации.** После `pages` GitLab сам запускает служебный job
    `pages:deploy` — он и раскладывает сайт.
@@ -263,7 +294,7 @@ npx serve dist/client     # или любой статический серве�
 
 **В консоли `Missing Supabase environment variable(s)`**
 В сборку не попали `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY`. Они берутся из `.env`
-в репозитории; если `.env` удалён — задайте их как CI/CD variables (см. 1.4). Переменные
+в репозитории; если `.env` удалён — задайте их как CI/CD variables (см. 1.5). Переменные
 подставляются **на этапе сборки**, добавить их «потом» без пересборки нельзя.
 
 **Голосование не доходит до дашборда, в консоли ошибки WebSocket**
@@ -272,8 +303,8 @@ Realtime идёт по `wss://` к Supabase. Проверьте, что сайт
 
 **QR ведёт не туда**
 Ссылка строится от `window.location.origin`. Это корректно только когда сайт лежит в корне
-домена — см. п. 1.2.
+домена — см. п. 1.3.
 
 **Сайт не обновился после пуша в GitHub**
 Pages собираются из репозитория GitLab. Если зеркалирование не настроено, пуш в GitHub сам по
-себе пайплайн не запускает — нужно пушить и в GitLab (см. 1.1).
+себе пайплайн не запускает — нужно пушить и в GitLab (см. 1.2).
