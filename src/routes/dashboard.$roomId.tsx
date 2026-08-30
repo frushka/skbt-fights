@@ -1,20 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import type { RealtimeChannel } from "@supabase/supabase-js";
-import { supabase } from "@/integrations/supabase/client";
+import { joinRoom, realtimeUrl, type ConnectionState, type RoomConnection } from "@/lib/realtime";
 import { createClientId, roomChannelName } from "@/lib/room";
-
-type ConnectionState = "connecting" | "connected" | "reconnecting";
 
 const CONNECTION_LABEL: Record<ConnectionState, string> = {
   connecting: "Подключение…",
   connected: "Комната в эфире",
   reconnecting: "Переподключение…",
 };
-
-/** Задержки перед повторным подключением: последняя повторяется, пока канал не поднимется. */
-const RETRY_DELAYS_MS = [1000, 2000, 5000];
 
 export const Route = createFileRoute("/dashboard/$roomId")({
   head: () => ({
@@ -41,91 +35,42 @@ function Dashboard() {
   const [voteUrl, setVoteUrl] = useState("");
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const clientIdRef = useRef(createClientId());
-  const channelRef = useRef<RealtimeChannel | null>(null);
+  const roomRef = useRef<RoomConnection | null>(null);
+  const configured = realtimeUrl() !== null;
 
   useEffect(() => {
     setVoteUrl(`${window.location.origin}/vote/${roomId}`);
   }, [roomId]);
 
   useEffect(() => {
-    let disposed = false;
-    let attempt = 0;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let channel: RealtimeChannel | null = null;
-
-    const scheduleRetry = () => {
-      if (disposed || retryTimer !== null) return;
-      const delay = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)] ?? 5000;
-      attempt += 1;
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        connect();
-      }, delay);
-    };
-
-    const connect = () => {
-      if (disposed) return;
-      if (channel) {
-        const stale = channel;
-        channel = null;
-        channelRef.current = null;
-        void supabase.removeChannel(stale);
-      }
-
-      const next = supabase.channel(roomChannelName(roomId), {
-        config: { presence: { key: clientIdRef.current } },
-      });
-      channel = next;
-      channelRef.current = next;
-
-      next
-        .on("broadcast", { event: "value" }, ({ payload }) => {
-          const { id, value } = payload as { id: string; value: number };
-          setValues((prev) => ({ ...prev, [id]: value }));
-        })
-        .on("presence", { event: "sync" }, () => {
-          const state = next.presenceState<{ role?: string }>();
-          const voters = Object.entries(state).filter(([, metas]) =>
-            metas.some((m) => m.role === "voter"),
-          );
-          setParticipants(voters.length);
-          setValues((prev) => {
-            const alive = new Set(voters.map(([key]) => key));
-            const result: Record<string, number> = {};
-            for (const key of Object.keys(prev)) {
-              if (alive.has(key)) result[key] = prev[key] ?? 0;
-            }
-            return result;
-          });
-        })
-        .subscribe(async (status) => {
-          // Отставшее событие от канала, который мы уже заменили или размонтировали.
-          if (disposed || channelRef.current !== next) return;
-
-          if (status === "SUBSCRIBED") {
-            attempt = 0;
-            setConnection("connected");
-            await next.track({ role: "host" });
-            return;
+    const room = joinRoom(roomChannelName(roomId), clientIdRef.current, "host", {
+      onValue: (id, value) => setValues((prev) => ({ ...prev, [id]: value })),
+      onParticipants: (ids) => {
+        setParticipants(ids.length);
+        // Ушедших убираем из суммы, иначе их последнее значение висело бы в среднем вечно.
+        setValues((prev) => {
+          const alive = new Set(ids);
+          const result: Record<string, number> = {};
+          for (const key of Object.keys(prev)) {
+            if (alive.has(key)) result[key] = prev[key] ?? 0;
           }
-
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-            // Без этого столбик просто замирал бы на последнем значении, выглядя как рабочий.
-            setConnection("reconnecting");
-            setParticipants(0);
-            setValues({});
-            scheduleRetry();
-          }
+          return result;
         });
-    };
-
-    connect();
+      },
+      onState: (state) => {
+        setConnection(state);
+        // Пока связи нет, показывать старые цифры нельзя — они выглядят как живые.
+        if (state === "reconnecting") {
+          setParticipants(0);
+          setValues({});
+        }
+      },
+    });
+    roomRef.current = room;
 
     return () => {
-      disposed = true;
-      if (retryTimer !== null) clearTimeout(retryTimer);
-      channelRef.current = null;
-      if (channel) void supabase.removeChannel(channel);
+      roomRef.current = null;
+      room.close();
     };
   }, [roomId]);
 
@@ -134,6 +79,8 @@ function Dashboard() {
   const scale = 100;
   const ratio = Math.max(-1, Math.min(1, total / scale));
   const positive = total >= 0;
+
+  if (!configured) return <NotConfigured />;
 
   return (
     <main className="relative min-h-screen overflow-hidden px-6 py-6">
@@ -202,6 +149,21 @@ function Dashboard() {
 
           <p className="mt-8 text-sm text-muted-foreground">Шкала фиксирована: +100 … −100</p>
         </section>
+      </div>
+    </main>
+  );
+}
+
+/** Лучше честно сказать про недостающую настройку, чем показать пустой график как рабочий. */
+function NotConfigured() {
+  return (
+    <main className="flex min-h-screen items-center justify-center px-6 text-center">
+      <div className="max-w-sm">
+        <h1 className="text-xl font-semibold">Сервер не настроен</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Не задана переменная сборки <code>VITE_REALTIME_URL</code> — адрес сервера реального
+          времени. Инструкция по развёртыванию: <code>server/README.md</code>.
+        </p>
       </div>
     </main>
   );
