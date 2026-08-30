@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RealtimeChannel } from "@supabase/supabase-js";
-import { supabase } from "@/integrations/supabase/client";
+import { joinRoom, realtimeUrl, type ConnectionState, type RoomConnection } from "@/lib/realtime";
 import {
   RETURN_DURATION_MS,
   createClientId,
@@ -10,16 +9,11 @@ import {
   type ThrottledSender,
 } from "@/lib/room";
 
-type ConnectionState = "connecting" | "connected" | "reconnecting";
-
 const CONNECTION_LABEL: Record<ConnectionState, string> = {
   connecting: "Подключение…",
   connected: "Подключено",
   reconnecting: "Переподключение…",
 };
-
-/** Задержки перед повторным подключением: последняя повторяется, пока канал не поднимется. */
-const RETRY_DELAYS_MS = [1000, 2000, 5000];
 
 export const Route = createFileRoute("/vote/$roomId")({
   head: () => ({
@@ -41,91 +35,33 @@ function Vote() {
   const [value, setValue] = useState(0);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [dragging, setDragging] = useState(false);
+  const configured = realtimeUrl() !== null;
 
   const trackRef = useRef<HTMLDivElement | null>(null);
-  const channelRef = useRef<RealtimeChannel | null>(null);
+  const roomRef = useRef<RoomConnection | null>(null);
   const clientIdRef = useRef(createClientId());
   const rafRef = useRef<number | null>(null);
   const senderRef = useRef<ThrottledSender | null>(null);
-  const valueRef = useRef(0);
 
   const send = useCallback((next: number, force = false) => {
-    valueRef.current = next;
     senderRef.current?.send(next, force);
   }, []);
 
   useEffect(() => {
-    const sender = createThrottledSender((next) => {
-      channelRef.current?.send({
-        type: "broadcast",
-        event: "value",
-        payload: { id: clientIdRef.current, value: Math.round(next) },
-      });
-    });
+    const sender = createThrottledSender((next) => roomRef.current?.send(next));
     senderRef.current = sender;
 
-    let disposed = false;
-    let attempt = 0;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let channel: RealtimeChannel | null = null;
-
-    const scheduleRetry = () => {
-      if (disposed || retryTimer !== null) return;
-      const delay = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)] ?? 5000;
-      attempt += 1;
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        connect();
-      }, delay);
-    };
-
-    // Пересоздаём канал целиком, а не переподписываем старый: у закрытого канала обработчики
-    // ошибок навешиваются заново при каждой подписке и начали бы копиться.
-    const connect = () => {
-      if (disposed) return;
-      if (channel) {
-        const stale = channel;
-        channel = null;
-        channelRef.current = null;
-        void supabase.removeChannel(stale);
-      }
-
-      const next = supabase.channel(roomChannelName(roomId), {
-        config: { presence: { key: clientIdRef.current }, broadcast: { self: false } },
-      });
-      channel = next;
-      channelRef.current = next;
-
-      next.subscribe(async (status) => {
-        // Отставшее событие от канала, который мы уже заменили или размонтировали.
-        if (disposed || channelRef.current !== next) return;
-
-        if (status === "SUBSCRIBED") {
-          attempt = 0;
-          setConnection("connected");
-          await next.track({ role: "voter" });
-          // Заново объявляем текущее положение: ведущий мог пропустить его, пока канала не было.
-          sender.send(valueRef.current, true);
-          return;
-        }
-
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-          setConnection("reconnecting");
-          scheduleRetry();
-        }
-      });
-    };
-
-    connect();
+    const room = joinRoom(roomChannelName(roomId), clientIdRef.current, "voter", {
+      onState: setConnection,
+    });
+    roomRef.current = room;
 
     return () => {
-      disposed = true;
-      if (retryTimer !== null) clearTimeout(retryTimer);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       sender.cancel();
       senderRef.current = null;
-      channelRef.current = null;
-      if (channel) void supabase.removeChannel(channel);
+      roomRef.current = null;
+      room.close();
     };
   }, [roomId]);
 
@@ -185,6 +121,8 @@ function Vote() {
   const percent = (1 - (value + 100) / 200) * 100;
   const positive = value >= 0;
 
+  if (!configured) return <NotConfigured />;
+
   return (
     <main className="relative flex min-h-screen touch-none flex-col overflow-hidden px-6 py-6">
       <div className="pointer-events-none absolute inset-0 bg-glow" />
@@ -229,6 +167,21 @@ function Vote() {
         <p className="text-center text-lg font-semibold text-negative">Мне очень не нравится</p>
         <p className="mt-4 text-center text-xs text-muted-foreground">
           Отпустите — ползунок сам вернётся к нулю за 5 секунд
+        </p>
+      </div>
+    </main>
+  );
+}
+
+/** Лучше честно сказать про недостающую настройку, чем показать ползунок, который никуда не шлёт. */
+function NotConfigured() {
+  return (
+    <main className="flex min-h-screen items-center justify-center px-6 text-center">
+      <div className="max-w-sm">
+        <h1 className="text-xl font-semibold">Сервер не настроен</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Не задана переменная сборки <code>VITE_REALTIME_URL</code> — адрес сервера реального
+          времени. Инструкция по развёртыванию: <code>server/README.md</code>.
         </p>
       </div>
     </main>
