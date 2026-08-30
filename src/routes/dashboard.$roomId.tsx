@@ -1,8 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { createClientId, roomChannelName } from "@/lib/room";
+
+type ConnectionState = "connecting" | "connected" | "reconnecting";
+
+const CONNECTION_LABEL: Record<ConnectionState, string> = {
+  connecting: "Подключение…",
+  connected: "Комната в эфире",
+  reconnecting: "Переподключение…",
+};
+
+/** Задержки перед повторным подключением: последняя повторяется, пока канал не поднимется. */
+const RETRY_DELAYS_MS = [1000, 2000, 5000];
 
 export const Route = createFileRoute("/dashboard/$roomId")({
   head: () => ({
@@ -27,52 +39,97 @@ function Dashboard() {
   const [values, setValues] = useState<Record<string, number>>({});
   const [participants, setParticipants] = useState(0);
   const [voteUrl, setVoteUrl] = useState("");
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
   const clientIdRef = useRef(createClientId());
+  const channelRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
     setVoteUrl(`${window.location.origin}/vote/${roomId}`);
   }, [roomId]);
 
   useEffect(() => {
-    const channel = supabase.channel(roomChannelName(roomId), {
-      config: { presence: { key: clientIdRef.current } },
-    });
+    let disposed = false;
+    let attempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let channel: RealtimeChannel | null = null;
 
-    channel
-      .on("broadcast", { event: "value" }, ({ payload }) => {
-        const { id, value } = payload as { id: string; value: number };
-        setValues((prev) => ({ ...prev, [id]: value }));
-      })
-      .on("presence", { event: "sync" }, () => {
-        const state = channel.presenceState<{ role?: string }>();
-        const voters = Object.entries(state).filter(([, metas]) =>
-          metas.some((m) => m.role === "voter"),
-        );
-        setParticipants(voters.length);
-        setValues((prev) => {
-          const alive = new Set(voters.map(([key]) => key));
-          const next: Record<string, number> = {};
-          for (const key of Object.keys(prev)) {
-            if (alive.has(key)) next[key] = prev[key] ?? 0;
-          }
-          return next;
-        });
-      })
-      .subscribe(async (status) => {
-        if (status === "SUBSCRIBED") {
-          await channel.track({ role: "host" });
-        }
+    const scheduleRetry = () => {
+      if (disposed || retryTimer !== null) return;
+      const delay = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)] ?? 5000;
+      attempt += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        connect();
+      }, delay);
+    };
+
+    const connect = () => {
+      if (disposed) return;
+      if (channel) {
+        const stale = channel;
+        channel = null;
+        channelRef.current = null;
+        void supabase.removeChannel(stale);
+      }
+
+      const next = supabase.channel(roomChannelName(roomId), {
+        config: { presence: { key: clientIdRef.current } },
       });
+      channel = next;
+      channelRef.current = next;
+
+      next
+        .on("broadcast", { event: "value" }, ({ payload }) => {
+          const { id, value } = payload as { id: string; value: number };
+          setValues((prev) => ({ ...prev, [id]: value }));
+        })
+        .on("presence", { event: "sync" }, () => {
+          const state = next.presenceState<{ role?: string }>();
+          const voters = Object.entries(state).filter(([, metas]) =>
+            metas.some((m) => m.role === "voter"),
+          );
+          setParticipants(voters.length);
+          setValues((prev) => {
+            const alive = new Set(voters.map(([key]) => key));
+            const result: Record<string, number> = {};
+            for (const key of Object.keys(prev)) {
+              if (alive.has(key)) result[key] = prev[key] ?? 0;
+            }
+            return result;
+          });
+        })
+        .subscribe(async (status) => {
+          // Отставшее событие от канала, который мы уже заменили или размонтировали.
+          if (disposed || channelRef.current !== next) return;
+
+          if (status === "SUBSCRIBED") {
+            attempt = 0;
+            setConnection("connected");
+            await next.track({ role: "host" });
+            return;
+          }
+
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            // Без этого столбик просто замирал бы на последнем значении, выглядя как рабочий.
+            setConnection("reconnecting");
+            setParticipants(0);
+            setValues({});
+            scheduleRetry();
+          }
+        });
+    };
+
+    connect();
 
     return () => {
-      supabase.removeChannel(channel);
+      disposed = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      channelRef.current = null;
+      if (channel) void supabase.removeChannel(channel);
     };
   }, [roomId]);
 
-  const sum = useMemo(
-    () => Object.values(values).reduce((acc, v) => acc + v, 0),
-    [values],
-  );
+  const sum = useMemo(() => Object.values(values).reduce((acc, v) => acc + v, 0), [values]);
   const total = participants > 0 ? sum / participants : 0;
   const scale = 100;
   const ratio = Math.max(-1, Math.min(1, total / scale));
@@ -103,6 +160,13 @@ function Dashboard() {
           <div className="card-panel text-right">
             <p className="text-sm text-muted-foreground">Количество участников</p>
             <p className="mt-1 text-4xl font-bold tabular-nums">{participants}</p>
+            <p
+              className={`mt-1 text-xs ${
+                connection === "reconnecting" ? "text-negative" : "text-muted-foreground"
+              }`}
+            >
+              {CONNECTION_LABEL[connection]}
+            </p>
           </div>
         </header>
 
@@ -121,7 +185,7 @@ function Dashboard() {
             <div className="relative h-full w-full overflow-hidden rounded-2xl border border-border bg-card">
               <div className="absolute left-0 right-0 top-1/2 h-px bg-border" />
               <div
-                className={`absolute left-0 right-0 transition-all duration-100 ease-linear ${positive ? "bg-bar-positive" : "bg-bar-negative"}`}
+                className={`absolute left-0 right-0 transition-all duration-150 ease-linear ${positive ? "bg-bar-positive" : "bg-bar-negative"}`}
                 style={
                   positive
                     ? { bottom: "50%", height: `${ratio * 50}%` }
@@ -136,9 +200,7 @@ function Dashboard() {
             </div>
           </div>
 
-          <p className="mt-8 text-sm text-muted-foreground">
-            Шкала фиксирована: +100 … −100
-          </p>
+          <p className="mt-8 text-sm text-muted-foreground">Шкала фиксирована: +100 … −100</p>
         </section>
       </div>
     </main>

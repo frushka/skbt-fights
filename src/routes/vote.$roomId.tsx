@@ -2,7 +2,24 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
-import { RETURN_DURATION_MS, createClientId, roomChannelName } from "@/lib/room";
+import {
+  RETURN_DURATION_MS,
+  createClientId,
+  createThrottledSender,
+  roomChannelName,
+  type ThrottledSender,
+} from "@/lib/room";
+
+type ConnectionState = "connecting" | "connected" | "reconnecting";
+
+const CONNECTION_LABEL: Record<ConnectionState, string> = {
+  connecting: "Подключение…",
+  connected: "Подключено",
+  reconnecting: "Переподключение…",
+};
+
+/** Задержки перед повторным подключением: последняя повторяется, пока канал не поднимется. */
+const RETRY_DELAYS_MS = [1000, 2000, 5000];
 
 export const Route = createFileRoute("/vote/$roomId")({
   head: () => ({
@@ -22,45 +39,95 @@ export const Route = createFileRoute("/vote/$roomId")({
 function Vote() {
   const { roomId } = Route.useParams();
   const [value, setValue] = useState(0);
-  const [connected, setConnected] = useState(false);
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [dragging, setDragging] = useState(false);
 
   const trackRef = useRef<HTMLDivElement | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const clientIdRef = useRef(createClientId());
   const rafRef = useRef<number | null>(null);
-  const lastSentRef = useRef(0);
+  const senderRef = useRef<ThrottledSender | null>(null);
+  const valueRef = useRef(0);
 
   const send = useCallback((next: number, force = false) => {
-    const now = performance.now();
-    if (!force && now - lastSentRef.current < 40) return;
-    lastSentRef.current = now;
-    channelRef.current?.send({
-      type: "broadcast",
-      event: "value",
-      payload: { id: clientIdRef.current, value: Math.round(next) },
-    });
+    valueRef.current = next;
+    senderRef.current?.send(next, force);
   }, []);
 
   useEffect(() => {
-    const channel = supabase.channel(roomChannelName(roomId), {
-      config: { presence: { key: clientIdRef.current }, broadcast: { self: false } },
+    const sender = createThrottledSender((next) => {
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "value",
+        payload: { id: clientIdRef.current, value: Math.round(next) },
+      });
     });
-    channelRef.current = channel;
-    channel.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        setConnected(true);
-        await channel.track({ role: "voter" });
-        send(0, true);
+    senderRef.current = sender;
+
+    let disposed = false;
+    let attempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let channel: RealtimeChannel | null = null;
+
+    const scheduleRetry = () => {
+      if (disposed || retryTimer !== null) return;
+      const delay = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)] ?? 5000;
+      attempt += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        connect();
+      }, delay);
+    };
+
+    // Пересоздаём канал целиком, а не переподписываем старый: у закрытого канала обработчики
+    // ошибок навешиваются заново при каждой подписке и начали бы копиться.
+    const connect = () => {
+      if (disposed) return;
+      if (channel) {
+        const stale = channel;
+        channel = null;
+        channelRef.current = null;
+        void supabase.removeChannel(stale);
       }
-    });
+
+      const next = supabase.channel(roomChannelName(roomId), {
+        config: { presence: { key: clientIdRef.current }, broadcast: { self: false } },
+      });
+      channel = next;
+      channelRef.current = next;
+
+      next.subscribe(async (status) => {
+        // Отставшее событие от канала, который мы уже заменили или размонтировали.
+        if (disposed || channelRef.current !== next) return;
+
+        if (status === "SUBSCRIBED") {
+          attempt = 0;
+          setConnection("connected");
+          await next.track({ role: "voter" });
+          // Заново объявляем текущее положение: ведущий мог пропустить его, пока канала не было.
+          sender.send(valueRef.current, true);
+          return;
+        }
+
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          setConnection("reconnecting");
+          scheduleRetry();
+        }
+      });
+    };
+
+    connect();
 
     return () => {
+      disposed = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      sender.cancel();
+      senderRef.current = null;
       channelRef.current = null;
-      supabase.removeChannel(channel);
+      if (channel) void supabase.removeChannel(channel);
     };
-  }, [roomId, send]);
+  }, [roomId]);
 
   const stopAnimation = () => {
     if (rafRef.current) {
@@ -122,11 +189,13 @@ function Vote() {
     <main className="relative flex min-h-screen touch-none flex-col overflow-hidden px-6 py-6">
       <div className="pointer-events-none absolute inset-0 bg-glow" />
       <div className="relative z-10 flex flex-1 flex-col items-center">
-        <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
-          Комната {roomId}
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {connected ? "Подключено" : "Подключение…"}
+        <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Комната {roomId}</p>
+        <p
+          className={`mt-1 text-xs ${
+            connection === "reconnecting" ? "text-negative" : "text-muted-foreground"
+          }`}
+        >
+          {CONNECTION_LABEL[connection]}
         </p>
 
         <p className="mt-6 text-center text-lg font-semibold text-positive">Мне очень нравится</p>
