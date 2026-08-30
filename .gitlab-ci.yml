@@ -1,0 +1,60 @@
+# Публикация сайта на GitLab Pages.
+#
+# Сайт статический: сборка идёт по vite.config.pages.ts (SPA-режим TanStack Start),
+# на выходе получается dist/client, который перекладывается в public/ — именно эту папку
+# GitLab Pages забирает из артефактов и раздаёт.
+
+# В проекте bun.lock и bunfig.toml, поэтому ставим зависимости через bun.
+image: oven/bun:1
+
+stages:
+  - deploy
+
+# Кэш node_modules между пайплайнами. Ключ привязан к содержимому bun.lock:
+# лок поменялся — кэш инвалидируется сам.
+cache:
+  key:
+    files:
+      - bun.lock
+  paths:
+    - node_modules/
+
+# Имя job'а должно быть ровно `pages` — по нему GitLab понимает, что это деплой Pages.
+pages:
+  stage: deploy
+  script:
+    # Часть пакетов в bun.lock запинена на приватное зеркало npm от Lovable
+    # (europe-west1-npm.pkg.dev), которое доступно только изнутри их песочницы и
+    # отдаёт 403 в любом другом CI. Пути в зеркале совпадают с путями npmjs,
+    # поэтому достаточно подменить хост — версии и хеши пакетов остаются те же.
+    - sed -i 's#https://europe-west1-npm\.pkg\.dev/lovable-core-prod/sandbox-npm-cache/#https://registry.npmjs.org/#g' bun.lock
+
+    # Ставим ровно то, что записано в локе.
+    - bun install --frozen-lockfile
+
+    # Статическая сборка: vite build --config vite.config.pages.ts
+    - bun run build:pages
+
+    # Исходная папка public/ (favicon.ico, robots.txt) уже скопирована Vite внутрь
+    # dist/client, так что её можно заменить готовой сборкой.
+    - rm -rf public
+    - mv dist/client public
+
+    # Пререндер кладёт оболочку приложения в _shell.html — делаем её главной страницей.
+    - cp public/_shell.html public/index.html
+
+    # SPA-фолбэк для прямых заходов на /vote/<id> и /dashboard/<id>: таких файлов на диске
+    # нет, поэтому любой неизвестный путь отдаём как index.html со статусом 200.
+    - printf '/*  /index.html  200\n' > public/_redirects
+
+    # Подстраховка на случай, если _redirects не отработает: GitLab Pages отдаёт 404.html
+    # для несуществующих путей, и приложение всё равно загрузится.
+    - cp public/_shell.html public/404.html
+
+  artifacts:
+    paths:
+      - public
+
+  # Деплоим только из основной ветки проекта (main/master — что настроено по умолчанию).
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
