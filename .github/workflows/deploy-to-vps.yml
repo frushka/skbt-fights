@@ -1,0 +1,99 @@
+# Сборка сайта и доставка на собственный VPS.
+#
+# Раньше статику раздавал GitLab Pages, а на VPS жил только сервер реального времени.
+# Теперь сайт лежит там же: цепочка сократилась до GitHub → Actions → VPS, а GitLab,
+# зеркалирование и его пайплайн стали не нужны.
+#
+# Сборка идёт на раннере GitHub, а не на самом VPS: у машины 1 ГБ памяти, и занимать её
+# сборкой Vite незачем — на сервер приезжает готовая статика.
+#
+# Требуется секрет VPS_SSH_KEY — приватный ключ, публичная половина которого лежит
+# в /root/.ssh/authorized_keys на сервере. Подробности: docs/VPS_DEPLOY.md
+
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  # Позволяет выкатить вручную со вкладки Actions, не делая пустой коммит.
+  workflow_dispatch:
+
+# Две выкатки подряд не должны перезаписывать каталог одновременно.
+concurrency:
+  group: deploy-to-vps
+  cancel-in-progress: false
+
+env:
+  VPS_HOST: 194.107.200.176
+  VPS_USER: root
+  VPS_PATH: /var/www/pulse
+  # Адрес сервера реального времени. Не секрет — он и так уезжает в браузерный бандл.
+  VITE_REALTIME_URL: wss://rt.skbt-fights.ru/ws
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Часть пакетов в bun.lock запинена на приватное зеркало npm от Lovable
+      # (europe-west1-npm.pkg.dev). Снаружи их песочницы оно отдаёт 403 — на любом чужом
+      # раннере, не только на GitLab. Пути в зеркале совпадают с путями npmjs, поэтому
+      # достаточно подменить хост: версии и хеши пакетов остаются те же.
+      - name: Point the private npm mirror at npmjs
+        run: |
+          sed -i 's#https://europe-west1-npm\.pkg\.dev/lovable-core-prod/sandbox-npm-cache/#https://registry.npmjs.org/#g' bun.lock
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build static site
+        run: bun run build:pages
+
+      # Пререндер кладёт оболочку приложения в _shell.html — она же главная страница.
+      # SPA-фолбэк для /vote/<id> и /dashboard/<id> делает Caddy (try_files), поэтому
+      # _redirects и 404.html, нужные GitLab Pages, здесь не создаются.
+      - name: Make the shell the index page
+        run: cp dist/client/_shell.html dist/client/index.html
+
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "Секрет VPS_SSH_KEY не задан — добавьте его в Settings → Secrets and variables → Actions." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          # --delete убирает ассеты прошлых сборок: их имена содержат хеш содержимого,
+          # поэтому без очистки каталог рос бы с каждой выкаткой.
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            dist/client/ "$VPS_USER@$VPS_HOST:$VPS_PATH/"
+
+      # Доказательство, что файлы действительно доехали: если rsync промолчал об ошибке,
+      # а каталога нет — узнаем здесь, а не от зрителей в зале.
+      - name: Verify the files landed
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "test -f '$VPS_PATH/index.html' && ls -1 '$VPS_PATH' | head -20"
+
+      # Мягкая проверка: домен может быть ещё не перенаправлен на этот сервер, и это не повод
+      # валить выкатку — файлы уже на месте.
+      - name: Check the site over HTTPS
+        continue-on-error: true
+        run: |
+          for host in skbt-fights.ru www.skbt-fights.ru; do
+            if curl -fsS --max-time 15 "https://$host/" | grep -q "<html"; then
+              echo "$host — отвечает приложением"
+            else
+              echo "$host — не отвечает (проверьте DNS и Caddy)"
+            fi
+          done
