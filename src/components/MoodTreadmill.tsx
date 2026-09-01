@@ -38,6 +38,10 @@ export type MoodTreadmillProps = {
   /** Цвета для крайних значений шкалы. */
   positiveColor?: Oklch;
   negativeColor?: Oklch;
+  /** Ширина правой активной шкалы в пикселях. */
+  scaleWidth?: number;
+  /** Радиус ползунка. Больше половины ширины шкалы — ползунок выступает за трек. */
+  thumbRadius?: number;
   className?: string;
 };
 
@@ -59,12 +63,12 @@ const POSITIVE = MOOD_POSITIVE;
 const NEGATIVE = MOOD_NEGATIVE;
 
 // Геометрия: правая активная шкала и отступы вокруг поля графика.
-const SCALE_WIDTH = 18;
-const SCALE_GAP = 16;
+const DEFAULT_SCALE_WIDTH = 32;
+const DEFAULT_THUMB_RADIUS = 13;
+const SCALE_GAP = 20;
 const PAD_Y = 16;
 const PAD_LEFT = 4;
 const LINE_WIDTH = 2.5;
-const THUMB_RADIUS = 7;
 /** Ширина «растворения» истории у левого края, в долях ширины поля. */
 const FADE_RATIO = 0.16;
 
@@ -108,12 +112,14 @@ export function MoodTreadmill({
   fillAlpha = DEFAULT_FILL_ALPHA,
   positiveColor = POSITIVE,
   negativeColor = NEGATIVE,
+  scaleWidth = DEFAULT_SCALE_WIDTH,
+  thumbRadius = DEFAULT_THUMB_RADIUS,
   className,
 }: MoodTreadmillProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Живые значения держим в ref: перерисовка React не должна перезапускать rAF-цикл.
-  const cfg = useRef({
+  const latest = {
     value,
     min,
     max,
@@ -124,19 +130,11 @@ export function MoodTreadmill({
     fillAlpha,
     positiveColor,
     negativeColor,
-  });
-  cfg.current = {
-    value,
-    min,
-    max,
-    windowMs,
-    sampleMs,
-    smoothingMs,
-    tension,
-    fillAlpha,
-    positiveColor,
-    negativeColor,
+    scaleWidth,
+    thumbRadius,
   };
+  const cfg = useRef(latest);
+  cfg.current = latest;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -167,10 +165,15 @@ export function MoodTreadmill({
     let raf = 0;
 
     const draw = (now: number) => {
-      const { min, max, windowMs, sampleMs, fillAlpha, tension } = cfg.current;
+      const { min, max, windowMs, fillAlpha, tension, scaleWidth, thumbRadius } = cfg.current;
       const plotLeft = PAD_LEFT;
-      const plotRight = width - SCALE_WIDTH - SCALE_GAP;
+      const scaleX = width - scaleWidth; // левый край трека
+      // Кривая доводится до центра ползунка и уходит под трек: иначе между её концом
+      // и ползунком зияет промежуток и график перестаёт «вытекать» из шкалы.
+      const plotRight = scaleX + scaleWidth / 2;
       const plotWidth = Math.max(1, plotRight - plotLeft);
+      // Сетка под шкалу не лезет — она фон, а не часть активного элемента.
+      const gridRight = scaleX - SCALE_GAP;
       const top = PAD_Y;
       const bottom = height - PAD_Y;
       const span = Math.max(1e-6, max - min);
@@ -190,13 +193,13 @@ export function MoodTreadmill({
         ctx.strokeStyle = "oklch(0.72 0.03 255 / 0.1)";
         ctx.beginPath();
         ctx.moveTo(plotLeft, Math.round(y(level)) + 0.5);
-        ctx.lineTo(plotRight, Math.round(y(level)) + 0.5);
+        ctx.lineTo(gridRight, Math.round(y(level)) + 0.5);
         ctx.stroke();
       }
       ctx.strokeStyle = "oklch(0.72 0.03 255 / 0.28)";
       ctx.beginPath();
       ctx.moveTo(plotLeft, Math.round(baselineY) + 0.5);
-      ctx.lineTo(plotRight, Math.round(baselineY) + 0.5);
+      ctx.lineTo(gridRight, Math.round(baselineY) + 0.5);
       ctx.stroke();
 
       // Точки истории: x зависит от возраста замера, поэтому дорожка едет равномерно.
@@ -259,11 +262,11 @@ export function MoodTreadmill({
       ctx.restore();
 
       // ─── Правая активная шкала ───
-      const sx = width - SCALE_WIDTH;
-      const radius = SCALE_WIDTH / 2;
+      const sx = scaleX;
+      const radius = scaleWidth / 2;
       ctx.beginPath();
-      ctx.roundRect(sx, top, SCALE_WIDTH, bottom - top, radius);
-      ctx.fillStyle = "oklch(0.28 0.04 258 / 0.7)";
+      ctx.roundRect(sx, top, scaleWidth, bottom - top, radius);
+      ctx.fillStyle = "oklch(0.28 0.04 258 / 0.88)";
       ctx.fill();
       ctx.strokeStyle = "oklch(0.72 0.03 255 / 0.2)";
       ctx.lineWidth = 1;
@@ -271,7 +274,7 @@ export function MoodTreadmill({
 
       ctx.save();
       ctx.beginPath();
-      ctx.roundRect(sx, top, SCALE_WIDTH, bottom - top, radius);
+      ctx.roundRect(sx, top, scaleWidth, bottom - top, radius);
       ctx.clip();
       const barTop = Math.min(headY, baselineY);
       const barHeight = Math.abs(headY - baselineY);
@@ -279,12 +282,12 @@ export function MoodTreadmill({
       barGradient.addColorStop(0, css(color, 0.95));
       barGradient.addColorStop(1, css(color, 0.25));
       ctx.fillStyle = barGradient;
-      ctx.fillRect(sx, barTop, SCALE_WIDTH, barHeight);
+      ctx.fillRect(sx, barTop, scaleWidth, barHeight);
       ctx.restore();
 
       // Ползунок — точка, из которой «вытекает» график.
       ctx.beginPath();
-      ctx.arc(sx + radius, headY, THUMB_RADIUS, 0, Math.PI * 2);
+      ctx.arc(sx + radius, headY, thumbRadius, 0, Math.PI * 2);
       ctx.fillStyle = css(color, 1);
       ctx.shadowColor = css(color, 0.7);
       ctx.shadowBlur = 18;
