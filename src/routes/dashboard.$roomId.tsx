@@ -4,6 +4,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { joinRoom, realtimeUrl, type ConnectionState, type RoomConnection } from "@/lib/realtime";
 import { createClientId, roomChannelName } from "@/lib/room";
 import { MoodTreadmill } from "@/components/MoodTreadmill";
+import { moodColor } from "@/lib/mood-color";
 
 const CONNECTION_LABEL: Record<ConnectionState, string> = {
   connecting: "Подключение…",
@@ -78,7 +79,6 @@ function Dashboard() {
   const sum = useMemo(() => Object.values(values).reduce((acc, v) => acc + v, 0), [values]);
   const total = participants > 0 ? sum / participants : 0;
   const scale = 100;
-  const positive = total >= 0;
 
   if (!configured) return <NotConfigured />;
 
@@ -122,7 +122,8 @@ function Dashboard() {
             Настроение зала
           </p>
           <p
-            className={`mt-2 text-6xl font-bold tabular-nums ${positive ? "text-positive" : "text-negative"}`}
+            className="mt-2 text-6xl font-bold tabular-nums transition-colors duration-300"
+            style={{ color: moodColor(total, -scale, scale) }}
           >
             {total > 0 ? "+" : ""}
             {Math.round(total)}

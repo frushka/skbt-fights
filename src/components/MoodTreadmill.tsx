@@ -1,4 +1,12 @@
 import { useEffect, useRef } from "react";
+import {
+  clamp,
+  mixOklch,
+  MOOD_NEGATIVE,
+  MOOD_POSITIVE,
+  oklch as css,
+  type Oklch,
+} from "@/lib/mood-color";
 
 /**
  * Виджет настроения зала: справа — активная вертикальная шкала с текущим значением,
@@ -10,9 +18,6 @@ import { useEffect, useRef } from "react";
  *
  * Настройка — через пропсы, значения по умолчанию собраны в блоке констант ниже.
  */
-
-/** Цвет в OKLCH: интерполируем численно, чтобы не гонять строки через color-mix. */
-type Oklch = { l: number; c: number; h: number };
 
 export type MoodTreadmillProps = {
   /** Текущее значение. Обновляйте как угодно часто — анимация сгладит скачки. */
@@ -45,8 +50,8 @@ const DEFAULT_FILL_ALPHA = 0.55;
 /** Насколько быстро заливка гаснет к нулевой линии: <1 — плотнее, >1 — воздушнее. */
 const FILL_FALLOFF = 0.55;
 const FILL_STOPS = 6;
-const POSITIVE: Oklch = { l: 0.84, c: 0.19, h: 148 };
-const NEGATIVE: Oklch = { l: 0.68, c: 0.21, h: 18 };
+const POSITIVE = MOOD_POSITIVE;
+const NEGATIVE = MOOD_NEGATIVE;
 
 // Геометрия: правая активная шкала и отступы вокруг поля графика.
 const SCALE_WIDTH = 18;
@@ -60,16 +65,6 @@ const FADE_RATIO = 0.16;
 
 type Sample = { t: number; v: number };
 type Point = { x: number; y: number };
-
-const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-
-const css = ({ l, c, h }: Oklch, alpha = 1) => `oklch(${l} ${c} ${h} / ${clamp(alpha, 0, 1)})`;
-
-/** Цвет текущего значения: от негативного к позитивному по положению на шкале. */
-function mixColor(a: Oklch, b: Oklch, t: number): Oklch {
-  const k = clamp(t, 0, 1);
-  return { l: a.l + (b.l - a.l) * k, c: a.c + (b.c - a.c) * k, h: a.h + (b.h - a.h) * k };
-}
 
 /**
  * Кривая Catmull-Rom, переписанная в кубические Безье: контрольные точки берутся
@@ -177,7 +172,7 @@ export function MoodTreadmill({
       const pxPerMs = plotWidth / windowMs;
 
       const ratio = (display - min) / span; // 0 — низ шкалы, 1 — верх
-      const color = mixColor(cfg.current.negativeColor, cfg.current.positiveColor, ratio);
+      const color = mixOklch(cfg.current.negativeColor, cfg.current.positiveColor, ratio);
       const baselineY = y(clamp(0, min, max));
       const headY = y(display);
 
