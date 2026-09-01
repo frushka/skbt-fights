@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { joinRoom, realtimeUrl, type ConnectionState, type RoomConnection } from "@/lib/realtime";
 import { createClientId, roomChannelName } from "@/lib/room";
+import { MoodTreadmill } from "@/components/MoodTreadmill";
+import { moodColor } from "@/lib/mood-color";
 
 const CONNECTION_LABEL: Record<ConnectionState, string> = {
   connecting: "Подключение…",
@@ -77,8 +79,6 @@ function Dashboard() {
   const sum = useMemo(() => Object.values(values).reduce((acc, v) => acc + v, 0), [values]);
   const total = participants > 0 ? sum / participants : 0;
   const scale = 100;
-  const ratio = Math.max(-1, Math.min(1, total / scale));
-  const positive = total >= 0;
 
   if (!configured) return <NotConfigured />;
 
@@ -122,32 +122,27 @@ function Dashboard() {
             Настроение зала
           </p>
           <p
-            className={`mt-2 text-6xl font-bold tabular-nums ${positive ? "text-positive" : "text-negative"}`}
+            className="mt-2 text-6xl font-bold tabular-nums transition-colors duration-300"
+            style={{ color: moodColor(total, -scale, scale) }}
           >
             {total > 0 ? "+" : ""}
             {Math.round(total)}
           </p>
 
-          <div className="relative mt-8 flex h-[52vh] w-40 flex-col items-center">
-            <div className="relative h-full w-full overflow-hidden rounded-2xl border border-border bg-card">
-              <div className="absolute left-0 right-0 top-1/2 h-px bg-border" />
-              <div
-                className={`absolute left-0 right-0 transition-all duration-150 ease-linear ${positive ? "bg-bar-positive" : "bg-bar-negative"}`}
-                style={
-                  positive
-                    ? { bottom: "50%", height: `${ratio * 50}%` }
-                    : { top: "50%", height: `${-ratio * 50}%` }
-                }
-              />
+          <div className="relative mt-8 h-[52vh] w-full max-w-5xl">
+            <div className="h-full w-full overflow-hidden rounded-2xl border border-border bg-card pl-4 pr-16">
+              <MoodTreadmill value={total} min={-scale} max={scale} className="h-full w-full" />
             </div>
-            <div className="pointer-events-none absolute -right-24 flex h-full flex-col justify-between py-0 text-xs text-muted-foreground">
+            <div className="pointer-events-none absolute bottom-4 right-4 top-4 flex flex-col justify-between text-xs text-muted-foreground">
               <span>+100</span>
               <span>0</span>
               <span>−100</span>
             </div>
           </div>
 
-          <p className="mt-8 text-sm text-muted-foreground">Шкала фиксирована: +100 … −100</p>
+          <p className="mt-8 text-sm text-muted-foreground">
+            Шкала фиксирована: +100 … −100 · история за последние 24 секунды
+          </p>
         </section>
       </div>
     </main>
