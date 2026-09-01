@@ -141,7 +141,7 @@ function Dashboard() {
           </div>
 
           <p className="mt-8 text-sm text-muted-foreground">
-            Шкала фиксирована: +100 … −100 · история за последние 10 минут
+            Шкала фиксирована: +100 … −100 · история за последнюю минуту
           </p>
         </section>
       </div>
