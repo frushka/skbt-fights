@@ -42,8 +42,13 @@ export type MoodTreadmillProps = {
 };
 
 // ─── Настройки по умолчанию ──────────────────────────────────────────────────
-const DEFAULT_WINDOW_MS = 24_000;
-const DEFAULT_SAMPLE_MS = 90;
+const DEFAULT_WINDOW_MS = 600_000;
+/**
+ * Шаг записи подобран под окно: за 10 минут при широком экране один замер приходится
+ * примерно на полтора пикселя. Писать чаще смысла нет — точки лягут в один столбец,
+ * а перерисовка кривой подорожает в разы.
+ */
+const DEFAULT_SAMPLE_MS = 500;
 const DEFAULT_SMOOTHING_MS = 240;
 const DEFAULT_TENSION = 1;
 const DEFAULT_FILL_ALPHA = 0.55;
@@ -158,6 +163,7 @@ export function MoodTreadmill({
     let display = clamp(cfg.current.value, cfg.current.min, cfg.current.max);
     let last = performance.now();
     let sinceSample = 0;
+    let sampleArea = 0; // ∫ display dt за текущий интервал — из него берём среднее
     let raf = 0;
 
     const draw = (now: number) => {
@@ -297,10 +303,14 @@ export function MoodTreadmill({
       const target = clamp(cfg.current.value, min, max);
       display += (target - display) * (1 - Math.exp(-dt / Math.max(1, smoothingMs)));
 
+      // В историю пишем среднее за интервал, а не мгновенный снимок: на длинном окне
+      // между замерами проходит полсекунды, и снимок раз в полсекунды терял бы всплески.
       sinceSample += dt;
+      sampleArea += display * dt;
       if (sinceSample >= sampleMs) {
+        samples.push({ t: now, v: sampleArea / sinceSample });
         sinceSample = 0;
-        samples.push({ t: now, v: display });
+        sampleArea = 0;
       }
       const cutoff = now - windowMs - sampleMs * 4;
       while (samples.length > 1) {
