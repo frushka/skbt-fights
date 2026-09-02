@@ -7,7 +7,8 @@
 export type Oklch = { l: number; c: number; h: number };
 
 export const MOOD_POSITIVE: Oklch = { l: 0.84, c: 0.19, h: 148 };
-export const MOOD_NEGATIVE: Oklch = { l: 0.68, c: 0.21, h: 18 };
+/** Приглушённый винный вместо сигнального алого: на пол-экрана заливки алый кричит. */
+export const MOOD_NEGATIVE: Oklch = { l: 0.62, c: 0.16, h: 22 };
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 

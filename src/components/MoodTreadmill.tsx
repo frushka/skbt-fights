@@ -69,6 +69,8 @@ const SCALE_GAP = 20;
 const PAD_Y = 16;
 const PAD_LEFT = 4;
 const LINE_WIDTH = 2.5;
+/** Полуширина полосы, в которой линия перекрашивается у нуля (доля высоты поля). */
+const LINE_BLEND = 0.015;
 /** Ширина «растворения» истории у левого края, в долях ширины поля. */
 const FADE_RATIO = 0.16;
 
@@ -166,6 +168,7 @@ export function MoodTreadmill({
 
     const draw = (now: number) => {
       const { min, max, windowMs, fillAlpha, tension, scaleWidth, thumbRadius } = cfg.current;
+      const { positiveColor, negativeColor } = cfg.current;
       const plotLeft = PAD_LEFT;
       const scaleX = width - scaleWidth; // левый край трека
       // Кривая доводится до центра ползунка и уходит под трек: иначе между её концом
@@ -181,7 +184,8 @@ export function MoodTreadmill({
       const pxPerMs = plotWidth / windowMs;
 
       const ratio = (display - min) / span; // 0 — низ шкалы, 1 — верх
-      const color = mixOklch(cfg.current.negativeColor, cfg.current.positiveColor, ratio);
+      // Ползунок и заполнение шкалы, наоборот, показывают именно текущее значение.
+      const color = mixOklch(negativeColor, positiveColor, ratio);
       const baselineY = y(clamp(0, min, max));
       const headY = y(display);
 
@@ -219,15 +223,19 @@ export function MoodTreadmill({
       const firstPoint = pts[0];
       const lastPoint = pts[pts.length - 1];
       if (firstPoint && lastPoint && pts.length >= 2) {
+        // Цвет кривой привязан к оси Y, а не к текущему значению: выше нуля зелёное,
+        // ниже — красное. Иначе уход зала в минус перекрашивал бы и ту историю,
+        // которая происходила при плюсе, и прошлое задним числом меняло бы смысл.
+        const zero = clamp((baselineY - top) / Math.max(1, bottom - top), 0.001, 0.999);
+
         // Заливка: плотная у краёв шкалы и полностью прозрачная на нулевой линии.
         // Профиль нелинейный (FILL_FALLOFF), иначе на тёмном фоне заливка почти не читается.
         const gradient = ctx.createLinearGradient(0, top, 0, bottom);
-        const zero = clamp((baselineY - top) / Math.max(1, bottom - top), 0.001, 0.999);
         for (let i = 0; i <= FILL_STOPS; i++) {
           const p = i / FILL_STOPS; // 0 — у нулевой линии, 1 — у края шкалы
           const alpha = fillAlpha * Math.pow(p, FILL_FALLOFF);
-          gradient.addColorStop(zero * (1 - p), css(color, alpha));
-          gradient.addColorStop(zero + (1 - zero) * p, css(color, alpha));
+          gradient.addColorStop(zero * (1 - p), css(positiveColor, alpha));
+          gradient.addColorStop(zero + (1 - zero) * p, css(negativeColor, alpha));
         }
 
         ctx.beginPath();
@@ -238,17 +246,37 @@ export function MoodTreadmill({
         ctx.fillStyle = gradient;
         ctx.fill();
 
-        // Линия со свечением — «кардиограмма».
-        ctx.beginPath();
-        strokeSpline(ctx, pts, tension);
+        // Линия держит чистый цвет почти до самого нуля и меняет его в узкой полосе
+        // вокруг него: разведи переход на всю высоту — и середина графика станет грязно-жёлтой.
+        const lineGradient = ctx.createLinearGradient(0, top, 0, bottom);
+        lineGradient.addColorStop(0, css(positiveColor, 0.95));
+        lineGradient.addColorStop(Math.max(0, zero - LINE_BLEND), css(positiveColor, 0.95));
+        lineGradient.addColorStop(Math.min(1, zero + LINE_BLEND), css(negativeColor, 0.95));
+        lineGradient.addColorStop(1, css(negativeColor, 0.95));
+
+        // Свечение у canvas одноцветное, поэтому линию рисуем в два прохода с отсечением
+        // по нулевой линии — иначе ореол выдавал бы цвет, которого в этой половине нет.
         ctx.lineWidth = LINE_WIDTH;
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
-        ctx.strokeStyle = css(color, 0.95);
-        ctx.shadowColor = css(color, 0.55);
-        ctx.shadowBlur = 14;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+        ctx.strokeStyle = lineGradient;
+        for (const half of [
+          { from: 0, to: baselineY, glow: positiveColor },
+          { from: baselineY, to: height, glow: negativeColor },
+        ]) {
+          if (half.to - half.from <= 0) continue;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(plotLeft, half.from, plotWidth, half.to - half.from);
+          ctx.clip();
+          ctx.beginPath();
+          strokeSpline(ctx, pts, tension);
+          ctx.shadowColor = css(half.glow, 0.55);
+          ctx.shadowBlur = 14;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.restore();
+        }
       }
 
       // Хвост истории растворяется у левого края, чтобы график не «обрубался».
