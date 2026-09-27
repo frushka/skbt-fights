@@ -133,7 +133,7 @@ function Dashboard() {
             <div className="h-full w-full overflow-hidden rounded-2xl border border-border bg-card pl-4 pr-16">
               <MoodTreadmill value={total} min={-scale} max={scale} className="h-full w-full" />
             </div>
-            <div className="pointer-events-none absolute bottom-4 right-4 top-4 flex flex-col justify-between text-xs text-muted-foreground">
+            <div className="pointer-events-none absolute bottom-6 right-4 top-6 flex flex-col justify-between text-xs text-muted-foreground">
               <span>+100</span>
               <span>0</span>
               <span>−100</span>
