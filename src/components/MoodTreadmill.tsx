@@ -179,8 +179,14 @@ export function MoodTreadmill({
       const gridRight = scaleX - SCALE_GAP;
       const top = PAD_Y;
       const bottom = height - PAD_Y;
+      // Крайние значения отстоят от краёв трека на радиус скругления, иначе ползунок
+      // при ±max встаёт центром на край и наполовину вылезает за шкалу.
+      const inset = Math.max(scaleWidth / 2, thumbRadius);
+      const valueTop = top + inset;
+      const valueBottom = bottom - inset;
       const span = Math.max(1e-6, max - min);
-      const y = (v: number) => bottom - ((clamp(v, min, max) - min) / span) * (bottom - top);
+      const y = (v: number) =>
+        valueBottom - ((clamp(v, min, max) - min) / span) * (valueBottom - valueTop);
       const pxPerMs = plotWidth / windowMs;
 
       const ratio = (display - min) / span; // 0 — низ шкалы, 1 — верх
