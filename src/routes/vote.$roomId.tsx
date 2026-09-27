@@ -9,6 +9,9 @@ import {
   type ThrottledSender,
 } from "@/lib/room";
 
+// Thumb diameter in px (matches `size-20`).
+const THUMB_SIZE = 80;
+
 const CONNECTION_LABEL: Record<ConnectionState, string> = {
   connecting: "Подключение…",
   connected: "Подключено",
@@ -92,7 +95,9 @@ function Vote() {
     if (!track) return 0;
     const rect = track.getBoundingClientRect();
     const center = rect.top + rect.height / 2;
-    const raw = ((center - clientY) / (rect.height / 2)) * 100;
+    // Usable half-range excludes half the thumb so it never leaves the track.
+    const half = Math.max(1, rect.height / 2 - THUMB_SIZE / 2);
+    const raw = ((center - clientY) / half) * 100;
     return Math.max(-100, Math.min(100, raw));
   };
 
@@ -151,13 +156,15 @@ function Vote() {
             className={`absolute left-1/2 w-2 -translate-x-1/2 rounded-full ${positive ? "bg-bar-positive" : "bg-bar-negative"}`}
             style={
               positive
-                ? { bottom: "50%", height: `${(value / 100) * 50}%` }
-                : { top: "50%", height: `${(-value / 100) * 50}%` }
+                ? { bottom: "50%", height: `calc((50% - ${THUMB_SIZE / 2}px) * ${value / 100})` }
+                : { top: "50%", height: `calc((50% - ${THUMB_SIZE / 2}px) * ${-value / 100})` }
             }
           />
           <div
             className="pointer-events-none absolute left-1/2 flex size-20 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-thumb text-lg font-bold tabular-nums shadow-thumb"
-            style={{ top: `${percent}%` }}
+            style={{
+              top: `calc(${THUMB_SIZE / 2}px + (100% - ${THUMB_SIZE}px) * ${percent / 100})`,
+            }}
           >
             {value > 0 ? "+" : ""}
             {Math.round(value)}
